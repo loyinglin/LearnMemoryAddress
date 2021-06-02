@@ -16,14 +16,13 @@
 #import <sys/stat.h>
 
 
-static int vcStaticInt = 12;
+static int vcStaticInt = 1024;
 static int vcStaticNotInit;
 static const char vcStaticInitStr[10] = "hello";
 static char vcStaticNotInitStr[10];
 
 struct TestStructObject {
-    char name[1024*100];
-    int value;
+    char name[1008];
 };
 typedef struct TestStructObject TestStructObject;
 
@@ -41,12 +40,18 @@ public:
 
 @interface TestOCObject : NSObject
 
-@property (nonatomic, assign) TestStructObject struct_object;
+@property (nonatomic, readonly, assign) char *name_buffer;
 
 @end
 
 @implementation TestOCObject
+{
+    char name[102400];
+}
 
+- (char *)name_buffer {
+    return name;
+}
 
 @end
 
@@ -62,10 +67,11 @@ public:
     // Do any additional setup after loading the view.
     [self printAddress];
 //    [self testStackSize:0];
-//    [self testHeapSize:0];
 //    [self testMalloc];
-//    [self testMemoryAllocFunc];
+    [self testMemoryAllocFunc];
     [self testMmap];
+    
+//    [self testHeapSize:0];
 }
 
 
@@ -75,21 +81,21 @@ public:
  */
 - (void)printAddress {
     intptr_t load_address = _dyld_get_image_vmaddr_slide(0);
-    NSLog(@"image_load_address: 0x%016lx\n", load_address);
+    NSLog(@"image_load_address: 0x%lx\n", load_address);
+    NSLog(@"class_address: 0x%lx\n", (long)[ViewController class]);
     
-    
-    NSLog(@"0x%016lx => data 0x%016lx => bss", (long)&vcStaticInt, (long)&vcStaticNotInit);
+    NSLog(@"0x%lx => data 0x%lx => bss", (long)&vcStaticInt, (long)&vcStaticNotInit);
     
     char stack_address;
     UIView *heap_view_address = [[UIView alloc] init];
-    NSLog(@"0x%016lx => stack 0x%016lx => heap", (long)&stack_address, (long)heap_view_address);
+    NSLog(@"0x%lx => stack 0x%lx => heap", (long)&stack_address, (long)heap_view_address);
     
     static char func_static_not_init_str[10];
     static char func_static_init_str[10] = "test";
-    NSLog(@"0x%016lx => func_static_not_init_str 0x%016lx => func_static_init_str", (long)func_static_not_init_str, (long)func_static_init_str);
+    NSLog(@"0x%lx => func_static_not_init_str 0x%lx => func_static_init_str", (long)func_static_not_init_str, (long)func_static_init_str);
     
     
-    NSLog(@"0x%016lx => vcStaticInitStr 0x%016lx => vcStaticNotInitStr", (long)vcStaticInitStr, (long)vcStaticNotInitStr);
+    NSLog(@"0x%lx => vcStaticInitStr 0x%lx => vcStaticNotInitStr", (long)vcStaticInitStr, (long)vcStaticNotInitStr);
     
 //    NSArray *abc = [NSArray new];
 //    [(NSMutableArray *)abc addObject:@(2)];
@@ -118,28 +124,53 @@ public:
 
 /**
  关注stack地址和heap地址的变化
- 注意stack的空间会有预留大概1MB左右
- 最终运行到14000次左右崩溃，iPhone XS Max
- 一次是100KB，14000次大概是1367MB左右的内存大小。
+ 注意stack的地址最后比堆地址小
+ 0x16d751aef
+ 0x3d7fcc000
+ 
+ 最终运行到达到63000次左右，一次是100KB，63000*100KB/1024/1024=6G左右的空间。（iPhone XS Max）
  
  */
 - (void)testHeapSize:(int)count {
-    char stackSize;
-    TestOCObject *obj = [[TestOCObject alloc] init];
-    char *head_end_address = (char *)sbrk((ptrdiff_t)0);
-    NSLog(@"%05d stack_address => 0x%lx heap_address => 0x%lx head_end_address:0x%p", count, (long)&stackSize, (long)obj, head_end_address);
-    if (count < 20000) {
+    // for test 1
+//    char stackSize;
+//    TestOCObject *obj = [[TestOCObject alloc] init];
+//    NSLog(@"%05d stack_address => 0x%lx heap_address => 0x%lx", count, (long)&stackSize, (long)obj);
+//    if (count < 20000) {
+//        ++count;
+//        [self testHeapSize:count];
+//    }
+//    else {
+//        NSLog(@"end");
+//    }
+    
+    // for test 2
+    NSMutableArray<TestOCObject *> *arr = [NSMutableArray new];
+    while (true) {
+        char stackSize;
+        TestOCObject *obj = [[TestOCObject alloc] init];
         ++count;
-        [self testHeapSize:count];
-    }
-    else {
-        NSLog(@"end");
+        if (obj) {
+            NSLog(@"%05d stack_address => 0x%lx heap_address => 0x%lx chars => 0x%lx", count, (long)&stackSize, (long)obj, (long)obj.name_buffer);
+            // 增加write操作
+//            for (int i = 0; i < 100; ++i) {
+//                memcpy(obj.name_buffer + (i * 1024), "hello", 6);
+//            }
+            [arr addObject:obj];
+            
+            // 增加read操作
+//            int index = arc4random_uniform(arr.count);
+//            NSLog(@"index:%d random_str:%s", index, arr[index].name_buffer);
+            
+        }
+        else {
+            break;
+        }
     }
 }
 
 /*
- 通过malloc分配的内存，可以超过14000次，达到63000次左右；
- 大概是通过OCalloc方法的4倍，总共有4G多的空间。
+ 通过malloc分配的内存，达到63000次左右，总共有6G左右的空间。
  
  */
 - (void)testMalloc {
